@@ -14,12 +14,14 @@ import (
 	"strings"
 )
 
+// Request describes a low-level Rukovoditel action.
 type Request struct {
 	Action   string
 	EntityID int64
 	Params   map[string]any
 }
 
+// Do sends an action and returns its raw response envelope.
 func (c *Client) Do(
 	ctx context.Context,
 	req Request,
@@ -71,7 +73,7 @@ func (c *Client) Do(
 	}
 
 	if err != nil {
-		return Response{}, fmt.Errorf("api: encode request: %w", err)
+		return Response{}, c.safeError("encode request", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(
@@ -81,7 +83,7 @@ func (c *Client) Do(
 		bytes.NewReader(body),
 	)
 	if err != nil {
-		return Response{}, fmt.Errorf("api: create request: %w", err)
+		return Response{}, c.safeError("create request", err)
 	}
 
 	httpReq.Header.Set("Content-Type", contentType)
@@ -89,7 +91,7 @@ func (c *Client) Do(
 
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return Response{}, fmt.Errorf("api: send request: %w", err)
+		return Response{}, c.safeError("send request", err)
 	}
 	defer httpResp.Body.Close()
 
@@ -99,29 +101,26 @@ func (c *Client) Do(
 		io.LimitReader(httpResp.Body, maxResponseSize+1),
 	)
 	if err != nil {
-		return Response{}, fmt.Errorf("api: read response: %w", err)
+		return Response{}, c.safeError("read response", err)
 	}
 	if len(responseBody) > maxResponseSize {
 		return Response{}, fmt.Errorf("api: response exceeds size limit")
 	}
 
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		return Response{}, fmt.Errorf(
-			"api: unexpected HTTP status %d: %s",
-			httpResp.StatusCode,
-			string(responseBody),
-		)
+		return Response{}, &HTTPError{StatusCode: httpResp.StatusCode, Body: responseBody}
 	}
 
 	var result Response
 	if err := json.Unmarshal(responseBody, &result); err != nil {
-		return Response{}, fmt.Errorf("api: decode response: %w", err)
+		return Response{}, c.safeError("decode response", err)
 	}
 
 	if result.Status != "success" {
 		return result, &APIError{
 			Status: result.Status,
 			Data:   result.Data,
+			Body:   responseBody,
 		}
 	}
 

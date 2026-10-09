@@ -5,24 +5,46 @@ import (
 	"fmt"
 )
 
+// Response is the common API envelope; Data keeps the action-specific JSON.
 type Response struct {
 	Status string          `json:"status"`
 	Data   json.RawMessage `json:"data"`
 }
 
+// HTTPError reports a non-2xx response and retains its raw body.
+type HTTPError struct {
+	StatusCode int
+	Body       []byte
+}
+
+// Error returns a message without including the response body.
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("api: unexpected HTTP status %d", e.StatusCode)
+}
+
+// APIError reports an unsuccessful API status and retains the raw response.
 type APIError struct {
 	Status string
 	Data   json.RawMessage
+	Body   []byte
 }
 
+// Error returns a message without including response data.
 func (e *APIError) Error() string {
-	if len(e.Data) == 0 || string(e.Data) == "null" {
-		return fmt.Sprintf("rukovoditel api: status %q", e.Status)
-	}
+	return "rukovoditel api: unsuccessful status"
+}
 
-	return fmt.Sprintf(
-		"rukovoditel api: status %q: %s",
-		e.Status,
-		e.Data,
-	)
+type safeCause struct {
+	op    string
+	cause error
+}
+
+func (e *safeCause) Error() string {
+	return "api: " + e.op + " failed"
+}
+
+func (e *safeCause) Unwrap() error { return e.cause }
+
+func (c *Client) safeError(op string, err error) error {
+	return &safeCause{op: op, cause: err}
 }
