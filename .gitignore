@@ -28,6 +28,9 @@ go.work.sum
 # env file
 .env
 
+# direnv\devenv file
+.envrc
+
 # Editor/IDE
 # .idea/
 # .vscode/
