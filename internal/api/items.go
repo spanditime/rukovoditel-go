@@ -8,19 +8,21 @@ import (
 	"strings"
 )
 
+// InsertResult contains the ID returned for a single inserted item.
 type InsertResult struct {
 	ID int64 `json:"id"`
 }
 
+// SelectParams contains the documented optional select parameters.
 type SelectParams struct {
 	Limit        *int
 	SelectFields []int64
 	ReportsID    *int64
 	Filters      map[string]any
 	RowsPerPage  *int
-	Page         *int
 }
 
+// Insert creates one item and returns its ID.
 func (c *Client) Insert(
 	ctx context.Context,
 	entityID int64,
@@ -47,6 +49,7 @@ func (c *Client) Insert(
 	return result, nil
 }
 
+// Select returns item fields under their original API response keys.
 func (c *Client) Select(
 	ctx context.Context,
 	entityID int64,
@@ -73,9 +76,6 @@ func (c *Client) Select(
 	if opts.RowsPerPage != nil {
 		params["rows_per_page"] = *opts.RowsPerPage
 	}
-	if opts.Page != nil {
-		params["page"] = *opts.Page
-	}
 
 	resp, err := c.Do(ctx, Request{
 		Action:   "select",
@@ -96,6 +96,7 @@ func (c *Client) Select(
 	return items, nil
 }
 
+// Update changes every item matching the required criteria.
 func (c *Client) Update(
 	ctx context.Context,
 	entityID int64,
@@ -105,7 +106,7 @@ func (c *Client) Update(
 	if len(data) == 0 {
 		return fmt.Errorf("api: update data is empty")
 	}
-	if len(updateByField) == 0 {
+	if !hasCriteria(updateByField) {
 		return fmt.Errorf("api: update criteria is empty")
 	}
 
@@ -120,12 +121,13 @@ func (c *Client) Update(
 	return err
 }
 
+// Delete removes every item matching the required criteria.
 func (c *Client) Delete(
 	ctx context.Context,
 	entityID int64,
 	deleteByField map[string]any,
 ) error {
-	if len(deleteByField) == 0 {
+	if !hasCriteria(deleteByField) {
 		return fmt.Errorf("api: delete criteria is empty")
 	}
 
@@ -137,4 +139,22 @@ func (c *Client) Delete(
 		},
 	})
 	return err
+}
+
+func hasCriteria(criteria map[string]any) bool {
+	if len(criteria) == 0 {
+		return false
+	}
+	values, err := encodeForm(criteria)
+	if err != nil {
+		return false
+	}
+	for _, entries := range values {
+		for _, value := range entries {
+			if strings.TrimSpace(value) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
