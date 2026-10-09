@@ -63,6 +63,31 @@ func TestInsert(t *testing.T) {
 	}
 }
 
+func TestInsertIDResponseFormats(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		data      string
+		wantID    int64
+		wantError bool
+	}{
+		{"string ID observed on 3.7", `{"id":"119"}`, 119, false},
+		{"number in documented example", `{"id":119}`, 119, false},
+		{"missing ID", `{}`, 0, true},
+		{"null ID", `{"id":null}`, 0, true},
+		{"nondecimal ID", `{"id":"not-an-id"}`, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := baseCRUDForm("insert")
+			want.Set("items[field_418]", "probe")
+			client, _ := crudClient(t, want, `{"status":"success","data":`+tc.data+`}`)
+			got, err := client.Insert(context.Background(), 34, map[string]any{"field_418": "probe"})
+			if (err != nil) != tc.wantError || got.ID != tc.wantID {
+				t.Fatalf("Insert = %+v, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestSelect(t *testing.T) {
 	limit, rows, report := 0, 25, int64(7)
 	tests := []struct {

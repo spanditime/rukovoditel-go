@@ -9,6 +9,7 @@ import (
 )
 
 // InsertResult contains the ID returned for a single inserted item.
+// Insert accepts a JSON number or a decimal JSON string for this ID.
 type InsertResult struct {
 	ID int64 `json:"id"`
 }
@@ -39,14 +40,28 @@ func (c *Client) Insert(
 		return InsertResult{}, err
 	}
 
-	var result InsertResult
-	if err := json.Unmarshal(resp.Data, &result); err != nil {
+	var wire struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(resp.Data, &wire); err != nil {
 		return InsertResult{}, fmt.Errorf(
 			"api: decode insert result: %w", err,
 		)
 	}
-
-	return result, nil
+	if len(wire.ID) == 0 || string(wire.ID) == "null" {
+		return InsertResult{}, fmt.Errorf("api: insert result has no ID")
+	}
+	idText := string(wire.ID)
+	if wire.ID[0] == '"' {
+		if err := json.Unmarshal(wire.ID, &idText); err != nil {
+			return InsertResult{}, fmt.Errorf("api: decode insert ID: %w", err)
+		}
+	}
+	id, err := strconv.ParseInt(idText, 10, 64)
+	if err != nil {
+		return InsertResult{}, fmt.Errorf("api: parse insert ID: %w", err)
+	}
+	return InsertResult{ID: id}, nil
 }
 
 // Select returns item fields under their original API response keys.
