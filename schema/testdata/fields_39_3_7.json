@@ -1,0 +1,49 @@
+{
+  "data": {
+    "418": {
+      "configuration": "\u003credacted\u003e",
+      "id": "418",
+      "is_heading": "\u003credacted\u003e",
+      "is_required": "\u003credacted\u003e",
+      "name": "\u003credacted\u003e",
+      "required_message": "",
+      "short_name": "",
+      "tooltip": "",
+      "type": "fieldtype_input"
+    },
+    "419": {
+      "configuration": "\u003credacted\u003e",
+      "id": "419",
+      "is_heading": "\u003credacted\u003e",
+      "is_required": "\u003credacted\u003e",
+      "name": "\u003credacted\u003e",
+      "required_message": "",
+      "short_name": "",
+      "tooltip": "",
+      "type": "fieldtype_dropdown"
+    },
+    "422": {
+      "configuration": "\u003credacted\u003e",
+      "id": "422",
+      "is_heading": "\u003credacted\u003e",
+      "is_required": "\u003credacted\u003e",
+      "name": "\u003credacted\u003e",
+      "required_message": "",
+      "short_name": "",
+      "tooltip": "",
+      "type": "fieldtype_attachments"
+    },
+    "428": {
+      "configuration": "\u003credacted\u003e",
+      "id": "428",
+      "is_heading": "\u003credacted\u003e",
+      "is_required": "\u003credacted\u003e",
+      "name": "\u003credacted\u003e",
+      "required_message": "",
+      "short_name": "",
+      "tooltip": "",
+      "type": "fieldtype_entity_ajax"
+    }
+  },
+  "status": "success"
+}

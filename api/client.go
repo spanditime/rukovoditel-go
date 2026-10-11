@@ -1,3 +1,5 @@
+// Package api provides a low-level client for documented Rukovoditel REST
+// actions. Response fields retain their original wire names.
 package api
 
 import (
@@ -29,7 +31,8 @@ const (
 	JSONEncoding
 )
 
-// Client holds immutable connection configuration for Rukovoditel.
+// Client holds connection configuration for Rukovoditel. It is safe for
+// concurrent use when the injected HTTPClient is not modified concurrently.
 type Client struct {
 	endpoint   string
 	key        string

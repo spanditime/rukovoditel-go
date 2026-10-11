@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spanditime/rukovoditel-go/internal/api"
+	"github.com/spanditime/rukovoditel-go/api"
 )
 
 func main() {

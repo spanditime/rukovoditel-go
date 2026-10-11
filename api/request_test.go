@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -149,4 +151,35 @@ func TestDoJSONRequest(t *testing.T) {
 	if _, err := client.Do(context.Background(), Request{Action: "select", EntityID: 21}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestClientConcurrentUse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("parse form: %v", err)
+			return
+		}
+		if r.PostForm.Get("key") != "secret-key" || r.PostForm.Get("action") != "select" {
+			t.Error("request lost shared configuration")
+		}
+		io.WriteString(w, `{"status":"success","data":`+strconv.Quote(r.PostForm.Get("entity_id"))+`}`)
+	}))
+	defer server.Close()
+	client, err := NewClient(testConfig(server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const workers = 32
+	var wg sync.WaitGroup
+	for i := 1; i <= workers; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			resp, err := client.Do(context.Background(), Request{Action: "select", EntityID: int64(id)})
+			if err != nil || string(resp.Data) != strconv.Quote(strconv.Itoa(id)) {
+				t.Errorf("request %d: data=%s error=%v", id, resp.Data, err)
+			}
+		}(i)
+	}
+	wg.Wait()
 }

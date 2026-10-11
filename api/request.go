@@ -21,7 +21,9 @@ type Request struct {
 	Params   map[string]any
 }
 
-// Do sends an action and returns its raw response envelope.
+// Do sends an action and returns its raw response envelope. On an API
+// status error it returns the envelope and an *APIError. HTTP and API errors
+// retain raw bodies, which may contain sensitive server data.
 func (c *Client) Do(
 	ctx context.Context,
 	req Request,

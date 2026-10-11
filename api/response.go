@@ -31,7 +31,7 @@ type APIError struct {
 
 // Error returns a message without including response data.
 func (e *APIError) Error() string {
-	return "rukovoditel api: unsuccessful status"
+	return "api: unsuccessful status"
 }
 
 type safeCause struct {

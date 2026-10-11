@@ -89,7 +89,7 @@ func TestInsertIDResponseFormats(t *testing.T) {
 }
 
 func TestSelect(t *testing.T) {
-	limit, rows, report := 0, 25, int64(7)
+	limit, rows := 0, 25
 	tests := []struct {
 		name    string
 		filters map[string]any
@@ -109,18 +109,28 @@ func TestSelect(t *testing.T) {
 			want := baseCRUDForm("select")
 			want.Set("limit", "0")
 			want.Set("rows_per_page", "25")
-			want.Set("reports_id", "7")
 			want.Set("select_fields", "338,388")
 			for key, values := range tc.want {
 				want[key] = values
 			}
 			client, _ := crudClient(t, want, `{"status":"success","data":[{"id":112,"338":"Заявка 6","388":"Новая"}]}`)
 			got, err := client.Select(context.Background(), 34, SelectParams{
-				Limit: &limit, RowsPerPage: &rows, ReportsID: &report,
+				Limit: &limit, RowsPerPage: &rows,
 				SelectFields: []int64{338, 388}, Filters: tc.filters,
 			})
 			if err != nil || len(got) != 1 || got[0]["338"] != "Заявка 6" || got[0]["field_338"] != nil {
 				t.Fatalf("Select = %v, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestSelectRejectsMissingOrWrongData(t *testing.T) {
+	for _, data := range []string{"null", "{}", `"text"`} {
+		t.Run(data, func(t *testing.T) {
+			client, _ := crudClient(t, baseCRUDForm("select"), `{"status":"success","data":`+data+`}`)
+			if _, err := client.Select(context.Background(), 34, SelectParams{}); err == nil {
+				t.Fatal("Select accepted non-array data")
 			}
 		})
 	}

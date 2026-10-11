@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/spanditime/rukovoditel-go/internal/api"
+	"github.com/spanditime/rukovoditel-go/api"
 )
 
 func main() {
@@ -65,7 +65,6 @@ func run() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
 	var data json.RawMessage
 	switch *action {
 	case "get_entities":

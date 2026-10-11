@@ -18,7 +18,6 @@ type InsertResult struct {
 type SelectParams struct {
 	Limit        *int
 	SelectFields []int64
-	ReportsID    *int64
 	Filters      map[string]any
 	RowsPerPage  *int
 }
@@ -82,9 +81,6 @@ func (c *Client) Select(
 		}
 		params["select_fields"] = strings.Join(fields, ",")
 	}
-	if opts.ReportsID != nil {
-		params["reports_id"] = *opts.ReportsID
-	}
 	if len(opts.Filters) > 0 {
 		params["filters"] = opts.Filters
 	}
@@ -102,6 +98,9 @@ func (c *Client) Select(
 	}
 
 	var items []map[string]any
+	if len(resp.Data) == 0 || string(resp.Data) == "null" {
+		return nil, fmt.Errorf("api: select result is not an array")
+	}
 	if err := json.Unmarshal(resp.Data, &items); err != nil {
 		return nil, fmt.Errorf(
 			"api: decode select result: %w", err,

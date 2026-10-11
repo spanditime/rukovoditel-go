@@ -2,7 +2,9 @@
 
 Пример вызывает методы `Client` для пяти metadata/process actions. Запросы
 отправляются как `POST application/x-www-form-urlencoded`; программа выводит
-только значение `data` из успешного envelope без интерпретации его схемы.
+значение `data` из успешного envelope без интерпретации его схемы.
+Для интерактивного просмотра сущностей и полей есть отдельная команда
+[`rukovoditel-inspect`](../../cmd/rukovoditel-inspect/README.md).
 
 Задайте полный URL API и credentials через окружение:
 
