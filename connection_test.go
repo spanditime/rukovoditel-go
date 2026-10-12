@@ -1,11 +1,14 @@
 package rukovoditel
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/spanditime/rukovoditel-go/api"
@@ -14,6 +17,60 @@ import (
 type task struct {
 	Title json.RawMessage `rukovoditel:"418"`
 }
+
+func TestConnectionPassesLoggerToLayers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Error(err)
+			return
+		}
+		switch r.Form.Get("action") {
+		case "get_entities":
+			fmt.Fprint(w, `{"status":"success","data":[{"id":"39","name":"Task"}]}`)
+		case "get_entity_fields":
+			fmt.Fprint(w, `{"status":"success","data":{"418":{"id":"418","type":"fieldtype_input"}}}`)
+		case "select":
+			fmt.Fprint(w, `{"status":"success","data":[{"id":"7","418":"private-title"}]}`)
+		default:
+			t.Errorf("unexpected action: %s", r.Form.Get("action"))
+		}
+	}))
+	defer server.Close()
+	var output bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	connection, err := New(api.Config{Endpoint: server.URL, Key: "secret-key", Username: "secret-user", Password: "secret-password", Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.Client().Logger() != logger {
+		t.Fatal("configured logger was not passed to API client")
+	}
+	if _, err := connection.Refresh(context.Background(), 39); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Register(39, task{}); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := Repository[task](connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Get(context.Background(), 7); err != nil {
+		t.Fatal(err)
+	}
+	logs := output.String()
+	for _, want := range []string{"rukovoditel API request completed", "rukovoditel schema refreshed", "rukovoditel ORM operation completed", "entity_id=39", "operation=get"} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("missing %q in logs: %s", want, logs)
+		}
+	}
+	for _, secret := range []string{"secret-key", "secret-user", "secret-password", "private-title", server.URL} {
+		if strings.Contains(logs, secret) {
+			t.Fatalf("logs contain sensitive value %q: %s", secret, logs)
+		}
+	}
+}
+
 type note struct {
 	Text json.RawMessage `rukovoditel:"519"`
 }

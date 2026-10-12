@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -21,6 +22,7 @@ type Repository[T any] struct {
 	client               *api.Client
 	cache                *schema.SchemaCache
 	model                *schema.Model
+	logger               *slog.Logger
 	itemsByQueryResolver ItemsByQueryResolver
 }
 
@@ -50,11 +52,29 @@ func NewRepository[T any](client *api.Client, cache *schema.SchemaCache) (*Repos
 	if reflect.TypeOf(zero).Kind() != reflect.Struct {
 		return nil, fmt.Errorf("orm: repository type must be a struct")
 	}
-	return &Repository[T]{client: client, cache: cache, model: m}, nil
+	return &Repository[T]{client: client, cache: cache, model: m, logger: client.Logger()}, nil
+}
+
+func (r *Repository[T]) logOperation(ctx context.Context, operation string, start time.Time, err error, attrs ...any) {
+	if r.logger == nil {
+		return
+	}
+	attrs = append([]any{"operation", operation, "entity_id", r.model.EntityID, "duration", time.Since(start)}, attrs...)
+	if err != nil {
+		r.logger.WarnContext(ctx, "rukovoditel ORM operation failed", attrs...)
+		return
+	}
+	if operation == "insert" || operation == "update" || operation == "delete" {
+		r.logger.InfoContext(ctx, "rukovoditel ORM operation completed", attrs...)
+		return
+	}
+	r.logger.DebugContext(ctx, "rukovoditel ORM operation completed", attrs...)
 }
 
 // Get reads an item by ID. A missing item returns an error.
-func (r *Repository[T]) Get(ctx context.Context, id int64) (T, error) {
+func (r *Repository[T]) Get(ctx context.Context, id int64) (item T, err error) {
+	start := time.Now()
+	defer func() { r.logOperation(ctx, "get", start, err, "item_id", id) }()
 	var zero T
 	if id <= 0 {
 		return zero, fmt.Errorf("orm: item ID must be positive")
@@ -325,7 +345,9 @@ func relationTargetID(meta schema.FieldMetadata) (int64, error) {
 }
 
 // Insert writes supported fields and returns the created item ID.
-func (r *Repository[T]) Insert(ctx context.Context, value T) (int64, error) {
+func (r *Repository[T]) Insert(ctx context.Context, value T) (id int64, err error) {
+	start := time.Now()
+	defer func() { r.logOperation(ctx, "insert", start, err, "item_id", id) }()
 	s, ok := r.cache.Get(r.model.EntityID)
 	if !ok {
 		return 0, fmt.Errorf("orm: entity schema is not cached")
@@ -342,7 +364,9 @@ func (r *Repository[T]) Insert(ctx context.Context, value T) (int64, error) {
 }
 
 // Update writes supported fields to every item matching the supplied IDs.
-func (r *Repository[T]) Update(ctx context.Context, value T, ids ...int64) error {
+func (r *Repository[T]) Update(ctx context.Context, value T, ids ...int64) (err error) {
+	start := time.Now()
+	defer func() { r.logOperation(ctx, "update", start, err, "id_count", len(ids)) }()
 	criterion, err := idCriterion(ids)
 	if err != nil {
 		return err
@@ -359,7 +383,9 @@ func (r *Repository[T]) Update(ctx context.Context, value T, ids ...int64) error
 }
 
 // Delete removes every item matching the supplied IDs.
-func (r *Repository[T]) Delete(ctx context.Context, ids ...int64) error {
+func (r *Repository[T]) Delete(ctx context.Context, ids ...int64) (err error) {
+	start := time.Now()
+	defer func() { r.logOperation(ctx, "delete", start, err, "id_count", len(ids)) }()
 	criterion, err := idCriterion(ids)
 	if err != nil {
 		return err
@@ -548,7 +574,9 @@ func (q *Query[T]) Sort(field string) *Query[T] {
 }
 
 // OneResponse executes the query and decodes one server response; it does not traverse pages.
-func (q *Query[T]) OneResponse(ctx context.Context) ([]T, error) {
+func (q *Query[T]) OneResponse(ctx context.Context) (items []T, err error) {
+	start := time.Now()
+	defer func() { q.repo.logOperation(ctx, "select", start, err, "row_count", len(items)) }()
 	if q.err != nil {
 		return nil, q.err
 	}

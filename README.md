@@ -43,6 +43,10 @@ go get github.com/spanditime/rukovoditel-go
 приложения. `NewClient` проверяет их наличие без сетевого запроса.
 По умолчанию используется form POST и HTTP timeout 10 секунд; свой
 `*http.Client` можно передать через `Config.HTTPClient`.
+Для логирования передайте `*slog.Logger` через `Config.Logger`; фасад
+передаст его клиенту, кэшу схем и репозиториям. Без логгера библиотека
+не пишет логи. В записях нет credentials, тел запросов и значений полей;
+подробности и уровни описаны в [CLIENT.md](docs/CLIENT.md).
 
 ```go
 client, err := api.NewClient(api.Config{

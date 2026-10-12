@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/spanditime/rukovoditel-go/api"
 )
@@ -132,6 +134,7 @@ func (s Schema) HeadingField() (FieldMetadata, bool) {
 // SchemaCache stores snapshots by explicit entity ID. It has no automatic expiry.
 type SchemaCache struct {
 	client *api.Client
+	logger *slog.Logger
 	mu     sync.RWMutex
 	items  map[int64]Schema
 	models map[reflect.Type]registeredModel
@@ -142,7 +145,7 @@ func NewSchemaCache(client *api.Client) (*SchemaCache, error) {
 	if client == nil {
 		return nil, fmt.Errorf("schema: schema cache requires a client")
 	}
-	return &SchemaCache{client: client, items: make(map[int64]Schema), models: make(map[reflect.Type]registeredModel)}, nil
+	return &SchemaCache{client: client, logger: client.Logger(), items: make(map[int64]Schema), models: make(map[reflect.Type]registeredModel)}, nil
 }
 
 // Get returns a copy of a cached snapshot, if present.
@@ -171,7 +174,18 @@ func (c *SchemaCache) ListEntities(ctx context.Context) ([]EntityMetadata, error
 
 // Refresh fetches entity and field metadata and atomically replaces one snapshot.
 // A failed request or invalid response leaves the previous snapshot intact.
-func (c *SchemaCache) Refresh(ctx context.Context, entityID int64) (Schema, error) {
+func (c *SchemaCache) Refresh(ctx context.Context, entityID int64) (result Schema, err error) {
+	start := time.Now()
+	defer func() {
+		if c.logger == nil {
+			return
+		}
+		if err != nil {
+			c.logger.WarnContext(ctx, "rukovoditel schema refresh failed", "entity_id", entityID, "duration", time.Since(start))
+			return
+		}
+		c.logger.InfoContext(ctx, "rukovoditel schema refreshed", "entity_id", entityID, "field_count", len(result.Fields), "duration", time.Since(start))
+	}()
 	if entityID <= 0 {
 		return Schema{}, fmt.Errorf("schema: entity ID must be positive")
 	}
@@ -201,7 +215,19 @@ func (c *SchemaCache) Refresh(ctx context.Context, entityID int64) (Schema, erro
 // atomically replaces the entire cache. If any request or parse fails, the
 // previous cache remains intact. It does not return a server-wide snapshot:
 // metadata may change while the requests are in progress.
-func (c *SchemaCache) RefreshAll(ctx context.Context) error {
+func (c *SchemaCache) RefreshAll(ctx context.Context) (err error) {
+	start := time.Now()
+	loaded := 0
+	defer func() {
+		if c.logger == nil {
+			return
+		}
+		if err != nil {
+			c.logger.WarnContext(ctx, "rukovoditel schema refresh all failed", "duration", time.Since(start))
+			return
+		}
+		c.logger.InfoContext(ctx, "rukovoditel schema refreshed all", "entity_count", loaded, "duration", time.Since(start))
+	}()
 	entities, err := c.loadEntities(ctx)
 	if err != nil {
 		return err
@@ -216,6 +242,7 @@ func (c *SchemaCache) RefreshAll(ctx context.Context) error {
 			return fmt.Errorf("schema: load entity %d: %w", entity.ID, err)
 		}
 		next[entity.ID] = schema
+		loaded++
 	}
 	c.mu.Lock()
 	for _, registered := range c.models {

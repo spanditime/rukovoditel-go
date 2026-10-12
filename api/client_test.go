@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -100,6 +102,35 @@ func TestNewClientUsesProvidedHTTPClient(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("provided HTTP transport was not used")
+	}
+}
+
+func TestClientLoggerDoesNotRecordResponseBodyOrCredentials(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprint(w, "private-response")
+	}))
+	defer server.Close()
+	var output bytes.Buffer
+	cfg := testConfig(server.URL)
+	cfg.Logger = slog.New(slog.NewTextHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	client, err := NewClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Do(context.Background(), Request{Action: "select", EntityID: 39}); err == nil {
+		t.Fatal("expected HTTP error")
+	}
+	logs := output.String()
+	for _, want := range []string{"failure=http", "http_status=502", "action=select", "entity_id=39"} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("missing %q in logs: %s", want, logs)
+		}
+	}
+	for _, secret := range []string{"secret-key", "secret-user", "secret-password", "private-response", server.URL} {
+		if strings.Contains(logs, secret) {
+			t.Fatalf("logs contain sensitive value %q: %s", secret, logs)
+		}
 	}
 }
 

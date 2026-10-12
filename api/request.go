@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Request describes a low-level Rukovoditel action.
@@ -27,7 +30,41 @@ type Request struct {
 func (c *Client) Do(
 	ctx context.Context,
 	req Request,
-) (Response, error) {
+) (response Response, err error) {
+	start := time.Now()
+	defer func() {
+		if c.logger == nil {
+			return
+		}
+		attrs := []any{
+			slog.String("action", req.Action),
+			slog.Int64("entity_id", req.EntityID),
+			slog.Duration("duration", time.Since(start)),
+		}
+		if err == nil {
+			c.logger.DebugContext(ctx, "rukovoditel API request completed", attrs...)
+			return
+		}
+		var httpErr *HTTPError
+		var apiErr *APIError
+		switch {
+		case errors.As(err, &httpErr):
+			attrs = append(attrs, slog.String("failure", "http"), slog.Int("http_status", httpErr.StatusCode))
+		case errors.As(err, &apiErr):
+			attrs = append(attrs, slog.String("failure", "api"))
+		case errors.Is(err, context.Canceled):
+			attrs = append(attrs, slog.String("failure", "canceled"))
+		case errors.Is(err, context.DeadlineExceeded):
+			attrs = append(attrs, slog.String("failure", "timeout"))
+		default:
+			attrs = append(attrs, slog.String("failure", "request"))
+		}
+		c.logger.WarnContext(ctx, "rukovoditel API request failed", attrs...)
+	}()
+	return c.do(ctx, req)
+}
+
+func (c *Client) do(ctx context.Context, req Request) (Response, error) {
 	if strings.TrimSpace(req.Action) == "" {
 		return Response{}, fmt.Errorf("api: action is required")
 	}

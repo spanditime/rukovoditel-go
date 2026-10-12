@@ -4,13 +4,14 @@ package api
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 )
 
-// Config contains the endpoint, credentials, and optional HTTP client.
+// Config contains the endpoint, credentials, and optional HTTP client and logger.
 type Config struct {
 	Endpoint string
 	Key      string
@@ -19,6 +20,8 @@ type Config struct {
 
 	HTTPClient *http.Client
 	Encoding   Encoding
+	// Logger receives sanitized operation events; nil disables logging.
+	Logger *slog.Logger
 }
 
 // Encoding selects the request body format.
@@ -40,6 +43,7 @@ type Client struct {
 	password   string
 	httpClient *http.Client
 	encoding   Encoding
+	logger     *slog.Logger
 }
 
 // NewClient validates the configuration and constructs a client.
@@ -83,5 +87,9 @@ func NewClient(cfg Config) (*Client, error) {
 		password:   cfg.Password,
 		httpClient: cfg.HTTPClient,
 		encoding:   cfg.Encoding,
+		logger:     cfg.Logger,
 	}, nil
 }
+
+// Logger returns the configured logger, or nil when logging is disabled.
+func (c *Client) Logger() *slog.Logger { return c.logger }
