@@ -14,12 +14,13 @@ type InsertResult struct {
 	ID int64 `json:"id"`
 }
 
-// SelectParams contains the documented optional select parameters.
+// SelectParams contains select parameters. Page was observed on server 3.7.
 type SelectParams struct {
 	Limit        *int
 	SelectFields []int64
 	Filters      map[string]any
 	RowsPerPage  *int
+	Page         *int
 }
 
 // Insert creates one item and returns its ID.
@@ -86,6 +87,12 @@ func (c *Client) Select(
 	}
 	if opts.RowsPerPage != nil {
 		params["rows_per_page"] = *opts.RowsPerPage
+	}
+	if opts.Page != nil {
+		if *opts.Page < 1 {
+			return nil, fmt.Errorf("api: select page must be positive")
+		}
+		params["page"] = *opts.Page
 	}
 
 	resp, err := c.Do(ctx, Request{

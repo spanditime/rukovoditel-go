@@ -7,13 +7,13 @@
       "level": 3,
       "name": "\u003credacted\u003e",
       "notes": "",
-      "parent_id": "\u003credacted\u003e",
+      "parent_id": "3",
       "path": [
-        "\u003credacted\u003e",
-        "\u003credacted\u003e",
-        "\u003credacted\u003e"
+        "1",
+        "2",
+        "3"
       ],
-      "sort_order": "\u003credacted\u003e"
+      "sort_order": "6"
     }
   ],
   "status": "success"

@@ -129,31 +129,61 @@ func main() {
 | `api` | `NewClient`, `Client.Do`, `Insert`, `Select`, `Update`, `Delete` | Form POST по умолчанию; `Do` возвращает `Response` с `json.RawMessage Data`; `Select` сохраняет ключи полей вроде `"418"`. |
 | `api` | `GetEntities`, `GetEntityFields`, `GetFieldChoices`, `GetProcessButtons`, `RunProcess` | `json.RawMessage`; структура `data` зависит от action. `RunProcess` может менять данные. |
 | `schema` | `NewSchemaCache`, `Refresh`, `RefreshAll`, `Get`, `Register`, `ModelFor` | Снимки metadata по явному entity ID; обновление только по вызову. `Model.Decode` и `EncodeWrite` выполняют преобразование без HTTP. |
-| `orm` | `NewRepository[T]`, `Get`, `Insert`, `Update`, `Delete`, `Query().Search().RowsPerPage().All()` | Типизированные операции по зарегистрированной структуре. `Sort` возвращает ошибку; `All` читает только один ответ сервера. |
+| `orm` | `NewRepository[T]`, `Get`, `Insert`, `Update`, `Delete`, `Query().Search().RowsPerPage().Page().All()` | Типизированные операции по зарегистрированной структуре. `Sort` возвращает ошибку; `All` читает только один ответ сервера. |
 
 Для модели используйте экспортируемые поля и теги `rukovoditel:"<ID>"`.
-Поле `rukovoditel:"id"` может иметь тип `int64`, `json.RawMessage`
-или `*json.RawMessage`. Пользовательское поле принимает `json.RawMessage`
-или `*json.RawMessage`. Тег `rukovoditel:"-,raw"` на
+Поле `rukovoditel:"id"` может иметь тип `int64`, `string`,
+`json.RawMessage` или `*json.RawMessage`. Пользовательское поле принимает
+`json.RawMessage`, `*json.RawMessage` или только для чтения `string`.
+Одиночный `fieldtype_users` или `fieldtype_users_approve` может быть вложенной структурой или указателем
+на неё, если модель пользователя зарегистрирована для сущности 1.
+Тег `rukovoditel:"-,raw"` на
 `map[string]json.RawMessage` сохраняет непривязанные ключи ответа.
 Неизвестные поля без этого тега нужно сохранять из исходной строки самому.
-Отсутствующий ключ остаётся нулевым значением, JSON `null` сохраняется
-как сырое `null`.
+Отсутствующий ключ остаётся нулевым значением; `RawMessage` сохраняет
+JSON `null`, а строковая привязка отклоняет его без потери смысла.
+Если ответ содержит `<ID>_db_value`, mapper использует его для
+привязанного поля; отображаемое значение `<ID>` остаётся в сыром поле.
+Для вложенных моделей полей `fieldtype_users`, `fieldtype_users_approve`,
+`fieldtype_users_ajax`, `fieldtype_entity` и `fieldtype_entity_ajax` ORM
+дозагружает записи по ID из `*_db_value`. `[]T` и `[]*T` читают несколько
+ID через запятую. Тег `rukovoditel:"parent_item_id"` дозагружает
+родительскую запись по системному ID. Модели целевых сущностей должны
+быть зарегистрированы.
+Если достаточно ID, используйте `int64`/`string` для одиночной связи и
+`[]int64`/`[]string` для множественной. Такой маппинг не запрашивает
+связанные записи и не требует регистрации их моделей; для родителя
+можно привязать `ParentID int64` с тегом `parent_item_id`.
+Системные `date_added`/`date_updated` и наблюдавшиеся поля даты можно
+читать в `time.Time` или `*time.Time`; `created_by` — как ID или вложенного
+пользователя. Строки даты не содержат часового пояса: при разборе
+сохраняются локальные компоненты с локацией UTC. Подробности и форматы —
+в [CLIENT.md](docs/CLIENT.md).
+Для dropdown можно привязать `schema.Choice`, чтобы получить ID и название
+варианта. Для `items_by_query` доступны срезы ID или вложенных моделей;
+простое условие по `parent_item_id` ORM читает автоматически, для
+произвольного SQL требуется явный resolver. Подробности — в
+[CLIENT.md](docs/CLIENT.md).
 
 `EncodeWrite` поддерживает только JSON-строки для полей metadata с типом
 `fieldtype_input`. Нулевое/отсутствующее значение опускается, пустая
 JSON-строка передаётся явно. JSON `null`, другие типы полей, связи и
-вложения отклоняются. Сервер решает, доступно ли поле для записи;
+вложения отклоняются. `fieldtype_formula` доступен только для чтения;
+строковые Go-привязки также не кодируются при записи. Сервер решает,
+доступно ли поле для записи;
 metadata не доказывает это. В `orm` `Insert` требует хотя бы одно
 кодируемое поле. Для сущности с обязательными неподдержанными полями
 используйте `api.Client.Do` и подтверждённый для неё wire format.
 
 `Query.Search("Title", "text")` переводит имя поля Go-структуры в ID
 поля и отправляет документированный `condition=search`.
-`RowsPerPage(n)` задаёт размер одного ответа. Имя параметра следующей
-страницы и произвольная сортировка не подтверждены, поэтому полного
-обхода страниц в `orm` нет. `api.Select` также предоставляет
-документированные `Filters`, `SelectFields`, `Limit` и `RowsPerPage`.
+`RowsPerPage(n)` задаёт размер одного ответа. `Page(n)` выбирает его
+номер в ORM; `api.SelectParams.Page` делает то же для низкоуровневого API.
+Первые три страницы
+проверены на тестовом сервере 3.7. Полного обхода страниц в `orm` нет:
+поведение за пределами набора и при изменениях во время чтения неизвестно.
+`api.Select` также предоставляет `Filters`, `SelectFields`, `Limit` и
+`RowsPerPage`. Произвольная сортировка не подтверждена.
 Низкоуровневый `Client.Do` позволяет исследовать дополнительные параметры
 без объявления их стабильным контрактом.
 
@@ -204,7 +234,7 @@ metadata не доказывает это. В `orm` `Insert` требует хо
 - [Низкоуровневый пример](examples/lowlevel/README.md)
 - [Metadata и process actions](examples/metadata/README.md)
 
-Не подтверждены единый формат error responses, имя параметра страницы,
+Не подтверждены единый формат error responses, поведение запредельной страницы,
 сортировка, batch insert, wire format связей и вложений, типы всех
 значений ответа, непустые global lists и эффекты `run_process`.
 Список наблюдений и границ вывода приведён в [RESEARCH.md](docs/RESEARCH.md).

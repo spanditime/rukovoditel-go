@@ -186,3 +186,23 @@ func TestUpdateDeleteRejectEmptyCriteria(t *testing.T) {
 		}
 	}
 }
+
+func TestSelectPageWire(t *testing.T) {
+	page, rows := 2, 2
+	want := baseCRUDForm("select")
+	want.Set("entity_id", "39")
+	want.Set("page", "2")
+	want.Set("rows_per_page", "2")
+	client, calls := crudClient(t, want, `{"status":"success","data":[]}`)
+	_, err := client.Select(context.Background(), 39, SelectParams{Page: &page, RowsPerPage: &rows})
+	if err != nil || *calls != 1 {
+		t.Fatalf("select page: calls=%d error=%v", *calls, err)
+	}
+	zero := 0
+	if _, err := client.Select(context.Background(), 39, SelectParams{Page: &zero}); err == nil {
+		t.Fatal("accepted page zero")
+	}
+	if *calls != 1 {
+		t.Fatalf("invalid page sent HTTP request")
+	}
+}

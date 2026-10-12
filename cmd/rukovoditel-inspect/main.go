@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/spanditime/rukovoditel-go/api"
 	"github.com/spanditime/rukovoditel-go/schema"
@@ -23,10 +24,11 @@ func main() {
 	fieldID := flag.Int64("field-id", 0, "show this field directly; requires -entity-id")
 	itemID := flag.Int64("item-id", 0, "show this item directly; requires -entity-id")
 	rowsPerPage := flag.Int("rows-per-page", 20, "size of the single item response")
+	page := flag.Int("page", 1, "starting item page (positive)")
 	flag.Parse()
-	if *entityID < 0 || *fieldID < 0 || *itemID < 0 || *rowsPerPage <= 0 ||
+	if *entityID < 0 || *fieldID < 0 || *itemID < 0 || *rowsPerPage <= 0 || *page <= 0 ||
 		((*fieldID > 0 || *itemID > 0) && *entityID == 0) || (*fieldID > 0 && *itemID > 0) {
-		fmt.Fprintln(os.Stderr, "use positive IDs; -field-id and -item-id each require -entity-id and cannot be combined; -rows-per-page must be positive")
+		fmt.Fprintln(os.Stderr, "use positive IDs; -field-id and -item-id each require -entity-id and cannot be combined; -rows-per-page and -page must be positive")
 		os.Exit(2)
 	}
 	client, err := api.NewClient(api.Config{
@@ -36,7 +38,7 @@ func main() {
 		Password: os.Getenv("RUKOVODITEL_PASSWORD"),
 	})
 	if err == nil {
-		err = inspect(context.Background(), client, os.Stdin, os.Stdout, *entityID, *fieldID, *itemID, *rowsPerPage)
+		err = inspectPage(context.Background(), client, os.Stdin, os.Stdout, *entityID, *fieldID, *itemID, *rowsPerPage, *page)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -45,6 +47,10 @@ func main() {
 }
 
 func inspect(ctx context.Context, client *api.Client, in io.Reader, out io.Writer, entityID, fieldID, itemID int64, rowsPerPage int) error {
+	return inspectPage(ctx, client, in, out, entityID, fieldID, itemID, rowsPerPage, 1)
+}
+
+func inspectPage(ctx context.Context, client *api.Client, in io.Reader, out io.Writer, entityID, fieldID, itemID int64, rowsPerPage, page int) error {
 	cache, err := schema.NewSchemaCache(client)
 	if err != nil {
 		return err
@@ -56,10 +62,9 @@ func inspect(ctx context.Context, client *api.Client, in io.Reader, out io.Write
 			if err != nil {
 				return fmt.Errorf("list entities: %w", err)
 			}
-			fmt.Fprintln(out, "ENTITY ID\tNAME")
+			showEntities(out, entities)
 			available := make(map[int64]bool, len(entities))
 			for _, entity := range entities {
-				fmt.Fprintf(out, "%d\t%q\n", entity.ID, entity.Name)
 				available[entity.ID] = true
 			}
 			for {
@@ -76,24 +81,14 @@ func inspect(ctx context.Context, client *api.Client, in io.Reader, out io.Write
 				fmt.Fprintf(out, "Entity %d is absent from the visible list.\n", entityID)
 			}
 		}
-		if itemID > 0 {
-			return showItem(ctx, client, out, entityID, itemID)
-		}
 		snapshot, err := cache.Refresh(ctx, entityID)
 		if err != nil {
 			return fmt.Errorf("load entity %d: %w", entityID, err)
 		}
-		fmt.Fprintf(out, "ENTITY %d %q\n", snapshot.Entity.ID, snapshot.Entity.Name)
-		fmt.Fprintln(out, "FIELD ID\tTYPE\tNAME")
-		ids := make([]int64, 0, len(snapshot.Fields))
-		for id := range snapshot.Fields {
-			ids = append(ids, id)
+		if itemID > 0 {
+			return showItem(ctx, client, out, snapshot, itemID)
 		}
-		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-		for _, id := range ids {
-			field := snapshot.Fields[id]
-			fmt.Fprintf(out, "%d\t%q\t%q\n", id, field.Type, field.Name)
-		}
+		showFields(out, snapshot)
 		if fieldID > 0 {
 			return showField(out, snapshot, fieldID)
 		}
@@ -111,10 +106,11 @@ func inspect(ctx context.Context, client *api.Client, in io.Reader, out io.Write
 				entityID = 0
 				break entityMenu
 			case "i":
-				quit, err := browseItems(ctx, client, scanner, out, entityID, rowsPerPage)
+				quit, err := browseItems(ctx, client, scanner, out, snapshot, rowsPerPage, page)
 				if err != nil || quit {
 					return err
 				}
+				showFields(out, snapshot)
 				continue
 			}
 			id, err := strconv.ParseInt(choice, 10, 64)
@@ -127,6 +123,116 @@ func inspect(ctx context.Context, client *api.Client, in io.Reader, out io.Write
 			}
 		}
 	}
+}
+
+func showEntities(out io.Writer, entities []schema.EntityMetadata) {
+	table := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	defer table.Flush()
+	fmt.Fprintln(table, "ENTITY ID\tNAME")
+	byID := make(map[int64]schema.EntityMetadata, len(entities))
+	for _, entity := range entities {
+		byID[entity.ID] = entity
+	}
+	children := make(map[int64][]schema.EntityMetadata)
+	var roots []schema.EntityMetadata
+	var orphans []schema.EntityMetadata
+	for _, entity := range entities {
+		parent := entity.ParentID()
+		if parent == 0 {
+			roots = append(roots, entity)
+		} else if _, visible := byID[parent]; visible && parent != entity.ID {
+			children[parent] = append(children[parent], entity)
+		} else {
+			orphans = append(orphans, entity)
+		}
+	}
+	less := func(a, b schema.EntityMetadata) bool {
+		if a.SortOrder != b.SortOrder {
+			return a.SortOrder < b.SortOrder
+		}
+		return a.ID < b.ID
+	}
+	sort.Slice(roots, func(i, j int) bool { return less(roots[i], roots[j]) })
+	sort.Slice(orphans, func(i, j int) bool {
+		if orphans[i].ParentID() != orphans[j].ParentID() {
+			return orphans[i].ParentID() < orphans[j].ParentID()
+		}
+		return less(orphans[i], orphans[j])
+	})
+	for parent := range children {
+		list := children[parent]
+		sort.Slice(list, func(i, j int) bool { return less(list[i], list[j]) })
+	}
+	seen := make(map[int64]bool, len(entities))
+	var printBranch func(schema.EntityMetadata, []bool)
+	printBranch = func(entity schema.EntityMetadata, laterSiblings []bool) {
+		if seen[entity.ID] {
+			return
+		}
+		seen[entity.ID] = true
+		var prefix string
+		for i := 0; i+1 < len(laterSiblings); i++ {
+			later := laterSiblings[i]
+			if later {
+				prefix += "│   "
+			} else {
+				prefix += "    "
+			}
+		}
+		if len(laterSiblings) > 0 {
+			if laterSiblings[len(laterSiblings)-1] {
+				prefix += "├─ "
+			} else {
+				prefix += "└─ "
+			}
+		}
+		suffix := ""
+		if len(laterSiblings) == 0 && entity.ParentID() != 0 {
+			suffix = fmt.Sprintf(" [parent %d not shown above]", entity.ParentID())
+		}
+		fmt.Fprintf(table, "%d\t%s%q%s\n", entity.ID, prefix, entity.Name, suffix)
+		childList := children[entity.ID]
+		for i, child := range childList {
+			printBranch(child, append(laterSiblings, i < len(childList)-1))
+		}
+	}
+	for _, root := range roots {
+		printBranch(root, nil)
+	}
+	for _, orphan := range orphans {
+		printBranch(orphan, nil)
+	}
+	// Preserve visibility even if inconsistent metadata forms a cycle.
+	remaining := append([]schema.EntityMetadata(nil), entities...)
+	sort.Slice(remaining, func(i, j int) bool { return less(remaining[i], remaining[j]) })
+	for _, entity := range remaining {
+		printBranch(entity, nil)
+	}
+}
+
+func showFields(out io.Writer, snapshot schema.Schema) {
+	fmt.Fprintf(out, "ENTITY %d %q\n", snapshot.Entity.ID, snapshot.Entity.Name)
+	table := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	defer table.Flush()
+	fmt.Fprintln(table, "FIELD ID\tTYPE\tNAME\tSHORT NAME\tHEADING\tREQUIRED")
+	ids := make([]int64, 0, len(snapshot.Fields))
+	for id := range snapshot.Fields {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for _, id := range ids {
+		field := snapshot.Fields[id]
+		fmt.Fprintf(table, "%d\t%q\t%q\t%q\t%s\t%s\n",
+			id, strings.TrimPrefix(field.Type, "fieldtype_"), field.Name, field.ShortName,
+			boolMark(field.IsHeading), boolMark(field.IsRequired))
+	}
+}
+
+func boolMark(value bool) string {
+	if value {
+		return "■"
+	}
+	return "·"
 }
 
 func readID(scanner *bufio.Scanner, out io.Writer, prompt string) (int64, error) {

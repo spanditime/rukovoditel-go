@@ -22,13 +22,13 @@ func TestSchemaCacheRefresh(t *testing.T) {
 		v := version
 		mu.Unlock()
 		if r.Form.Get("action") == "get_entities" {
-			_, _ = w.Write([]byte(`{"status":"success","data":[{"id":"39","name":"Task","extra":{"x":1}}]}`))
+			_, _ = w.Write([]byte(`{"status":"success","data":[{"id":"39","name":"Task","notes":"Description","sort_order":"6","parent_id":"25","level":1,"path":["25"],"extra":{"x":1}}]}`))
 			return
 		}
 		if v == 1 {
-			_, _ = w.Write([]byte(`{"status":"success","data":{"418":{"id":"418","type":"fieldtype_input","name":"Title","is_required":"1","extra":[null,2]}}}`))
+			_, _ = w.Write([]byte(`{"status":"success","data":{"418":{"id":"418","type":"fieldtype_input","name":"Title","short_name":"Short","is_heading":"1","is_required":"0","extra":[null,2]}}}`))
 		} else {
-			_, _ = w.Write([]byte(`{"status":"success","data":{"419":{"id":"419","type":"fieldtype_dropdown","name":"State"}}}`))
+			_, _ = w.Write([]byte(`{"status":"success","data":{"419":{"id":"419","type":"fieldtype_dropdown","name":"State","is_required":true,"is_heading":null}}}`))
 		}
 	}))
 	defer server.Close()
@@ -47,13 +47,14 @@ func TestSchemaCacheRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Entity.ID != 39 || !strings.Contains(string(first.Entity.Raw), `"extra"`) || first.Fields[418].Type != "fieldtype_input" || !strings.Contains(string(first.Fields[418].Raw), `"extra"`) {
+	if first.Entity.ID != 39 || first.Entity.Notes != "Description" || first.Entity.SortOrder != 6 || first.Entity.Level() != 1 || first.Entity.ParentID() != 25 || !strings.Contains(string(first.Entity.Raw), `"extra"`) || first.Fields[418].Type != "fieldtype_input" || first.Fields[418].ShortName != "Short" || !first.Fields[418].IsHeading || first.Fields[418].IsRequired || !strings.Contains(string(first.Fields[418].Raw), `"extra"`) {
 		t.Fatalf("invalid snapshot: %+v", first)
 	}
 	first.Fields[418] = FieldMetadata{}
 	first.Entity.Raw[0] = 'x'
+	first.Entity.Path[0] = 999
 	got, ok := cache.Get(39)
-	if !ok || got.Fields[418].ID != 418 || got.Entity.Raw[0] != '{' {
+	if !ok || got.Fields[418].ID != 418 || got.Entity.Raw[0] != '{' || got.Entity.ParentID() != 25 {
 		t.Fatal("cache changed through returned snapshot")
 	}
 	mu.Lock()
@@ -66,7 +67,7 @@ func TestSchemaCacheRefresh(t *testing.T) {
 	if _, ok := second.Fields[418]; ok {
 		t.Fatal("removed field persisted")
 	}
-	if second.Fields[419].ID != 419 {
+	if second.Fields[419].ID != 419 || !second.Fields[419].IsRequired || second.Fields[419].IsHeading {
 		t.Fatal("new field absent")
 	}
 	var wg sync.WaitGroup
@@ -86,6 +87,117 @@ func TestSchemaCacheRefresh(t *testing.T) {
 	wg.Wait()
 }
 
+func TestSchemaCacheChoices(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		var data string
+		switch r.Form.Get("action") {
+		case "get_entities":
+			data = `[{"id":"39","name":"Tasks"}]`
+		case "get_entity_fields":
+			data = `{"419":{"id":"419","type":"fieldtype_dropdown","name":"State"}}`
+		case "get_field_choices":
+			if r.Form.Get("field_id") != "419" {
+				t.Errorf("field ID = %q", r.Form.Get("field_id"))
+			}
+			data = `[{"id":"42","name":"Open","sort_order":"2","extra":true},{"id":"43","name":"Closed"}]`
+		default:
+			t.Errorf("unexpected action %q", r.Form.Get("action"))
+			data = `null`
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":` + data + `}`))
+	}))
+	defer server.Close()
+	client, err := api.NewClient(api.Config{Endpoint: server.URL, Key: "key", Username: "user", Password: "pass"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache, _ := NewSchemaCache(client)
+	if _, err := cache.Refresh(context.Background(), 39); err != nil {
+		t.Fatal(err)
+	}
+	choices, err := cache.Choices(context.Background(), 39, 419)
+	if err != nil || len(choices) != 2 || choices[0].ID != 42 || choices[0].Name != "Open" || !strings.Contains(string(choices[0].Raw), `"extra":true`) {
+		t.Fatalf("choices = %+v, %v", choices, err)
+	}
+	if _, err := cache.Choices(context.Background(), 39, 999); err == nil {
+		t.Fatal("unknown dropdown accepted")
+	}
+}
+
+func TestMetadataFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"string one", `"1"`, true},
+		{"escaped string one", `"\u0031"`, true},
+		{"number one", `1`, true},
+		{"boolean true", `true`, true},
+		{"string zero", `"0"`, false},
+		{"boolean false", `false`, false},
+		{"null", `null`, false},
+		{"other string", `"yes"`, false},
+		{"missing", ``, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := metadataFlag([]byte(tc.raw)); got != tc.want {
+				t.Fatalf("metadataFlag(%s) = %t, want %t", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSchemaHeadingField(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		fields map[int64]FieldMetadata
+		wantID int64
+		found  bool
+	}{
+		{"none", map[int64]FieldMetadata{3: {ID: 3}}, 0, false},
+		{"one", map[int64]FieldMetadata{3: {ID: 3, IsHeading: true}}, 3, true},
+		{"highest ID", map[int64]FieldMetadata{
+			5:  {ID: 5, IsHeading: true, Raw: []byte(`{"id":"5"}`)},
+			9:  {ID: 9, IsHeading: true, Raw: []byte(`{"id":"9"}`)},
+			12: {ID: 12},
+		}, 9, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := Schema{Fields: tc.fields}
+			got, ok := s.HeadingField()
+			if ok != tc.found || (ok && got.ID != tc.wantID) {
+				t.Fatalf("HeadingField() = (%+v, %t), want ID %d, found %t", got, ok, tc.wantID, tc.found)
+			}
+			if ok && len(got.Raw) > 0 {
+				got.Raw[0] = 'x'
+				if s.Fields[tc.wantID].Raw[0] != '{' {
+					t.Fatal("heading field changed the schema")
+				}
+			}
+		})
+	}
+}
+
+func TestFieldMetadataShortNameOrName(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		field FieldMetadata
+		want  string
+	}{
+		{"configured short name", FieldMetadata{Name: "Original", ShortName: "Short"}, "Short"},
+		{"empty short name", FieldMetadata{Name: "Original", ShortName: ""}, "Original"},
+		{"both empty", FieldMetadata{}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.field.ShortNameOrName(); got != tc.want {
+				t.Fatalf("ShortNameOrName() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestListEntitiesReadsOnlyEntityMetadata(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +206,7 @@ func TestListEntitiesReadsOnlyEntityMetadata(t *testing.T) {
 		if r.Form.Get("action") != "get_entities" {
 			t.Errorf("unexpected action %q", r.Form.Get("action"))
 		}
-		_, _ = w.Write([]byte(`{"status":"success","data":[{"id":"39","name":"Task","extra":true},{"id":"1","name":"Users"}]}`))
+		_, _ = w.Write([]byte(`{"status":"success","data":[{"id":"39","name":"Task","notes":"Description","sort_order":"6","path":["1","25"],"extra":true},{"id":"1","name":"Users","parent_id":"0","path":[],"sort_order":"1"}]}`))
 	}))
 	defer server.Close()
 	client, err := api.NewClient(api.Config{Endpoint: server.URL, Key: "key", Username: "user", Password: "pass"})
@@ -109,11 +221,36 @@ func TestListEntitiesReadsOnlyEntityMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requests != 1 || len(entities) != 2 || entities[0].ID != 1 || entities[1].ID != 39 || entities[1].Name != "Task" || !strings.Contains(string(entities[1].Raw), `"extra":true`) {
+	if requests != 1 || len(entities) != 2 || entities[0].ID != 1 || entities[0].Level() != 0 || entities[0].ParentID() != 0 || entities[1].ID != 39 || entities[1].Name != "Task" || entities[1].Notes != "Description" || entities[1].SortOrder != 6 || entities[1].Level() != 2 || entities[1].ParentID() != 25 || !strings.Contains(string(entities[1].Raw), `"extra":true`) {
 		t.Fatalf("unexpected entities: %#v, requests=%d", entities, requests)
 	}
 	if _, ok := cache.Get(39); ok {
 		t.Fatal("listing populated the schema cache")
+	}
+}
+
+func TestListEntitiesRejectsInvalidHierarchyNumbers(t *testing.T) {
+	for _, tc := range []struct {
+		name, entity string
+	}{
+		{"bad sort order", `{"id":"39","sort_order":"first","path":[]}`},
+		{"bad path ID", `{"id":"39","sort_order":"1","path":["wrong"]}`},
+		{"zero path ID", `{"id":"39","sort_order":"1","path":["0"]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = fmt.Fprintf(w, `{"status":"success","data":[%s]}`, tc.entity)
+			}))
+			defer server.Close()
+			client, err := api.NewClient(api.Config{Endpoint: server.URL, Key: "key", Username: "user", Password: "pass"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cache, _ := NewSchemaCache(client)
+			if _, err := cache.ListEntities(context.Background()); err == nil {
+				t.Fatal("accepted invalid entity metadata")
+			}
+		})
 	}
 }
 
@@ -268,7 +405,7 @@ func TestSchemaCacheServer37Fixtures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Entity.ID != 39 || len(snapshot.Fields) != 4 || snapshot.Fields[428].Type != "fieldtype_entity_ajax" {
+	if snapshot.Entity.ID != 39 || snapshot.Entity.SortOrder != 6 || snapshot.Entity.Level() != 3 || snapshot.Entity.ParentID() != 3 || len(snapshot.Fields) != 4 || snapshot.Fields[428].Type != "fieldtype_entity_ajax" {
 		t.Fatalf("unexpected schema: %+v", snapshot)
 	}
 	if !strings.Contains(string(snapshot.Entity.Raw), `"path"`) || !strings.Contains(string(snapshot.Entity.Raw), `"group_name"`) || !strings.Contains(string(snapshot.Fields[422].Raw), `"configuration"`) {
